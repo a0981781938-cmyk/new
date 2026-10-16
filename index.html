@@ -212,6 +212,7 @@ button:focus-visible, select:focus-visible, input:focus-visible, summary:focus-v
   function tagsHtml(s) {
     var g = sg(s), t = "";
     if (g) t += '<span class="tag t-' + g.type + '">' + TYPE[g.type] + "</span>" + g.tags.map(function (x) { return '<span class="tag">' + esc(x) + "</span>"; }).join("");
+    if (s.locked) t += '<span class="tag t-breakout">漲停鎖住，隔日難追</span>';
     if (s.attention) t += '<span class="tag warn">注意股</span>';
     return t ? '<div class="tags">' + t + "</div>" : "";
   }
@@ -240,8 +241,8 @@ button:focus-visible, select:focus-visible, input:focus-visible, summary:focus-v
     return '<div class="plan"><div class="ladder" aria-hidden="true"><i class="l-risk" style="width:' + w1 + '%"></i><i class="l-t1" style="width:' + w2 + '%"></i><i class="l-t2" style="width:' + w3 + '%"></i></div>' +
       '<div class="plan-grid"><div><span class="k">止損價</span><span class="v stop">' + fmtP(p.stop) + '</span></div><div><span class="k">' + (g.type === "pre" ? "觸發進場價" : "進場價") + '</span><span class="v">' + fmtP(p.entry) +
       '</span></div><div><span class="k">目標一</span><span class="v tgt">' + fmtP(p.t1) + '</span></div><div><span class="k">目標二</span><span class="v tgt">' + fmtP(p.t2) + "</span></div></div>" +
-      '<div class="plan-foot"><span>風險報酬比 <b class="' + (p.ok ? "ok" : "") + '">1 : ' + p.rr.toFixed(2) + "</b></span><span>止損距離 <b>" + p.risk_pct + "%</b>" + (p.capped ? "（上限）" : "") + "</span><span>預估持有 <b>" + p.hold + " 日</b>（上限 15）</span>" +
-      (p.ok ? "" : "<span>風險報酬比不足，僅供觀察</span>") + "</div>" +
+      '<div class="plan-foot"><span>風險報酬比 <b class="' + (p.ok ? "ok" : "") + '">1 : ' + p.rr.toFixed(2) + "</b></span><span>止損距離 <b>" + p.risk_pct + "%</b>" + (p.capped ? "（上限）" : p.widened ? "（已放寬）" : "") + "</span><span>預估持有 <b>" + p.hold + " 日</b>（上限 15）</span>" +
+      (p.ok ? "" : "<span>風險報酬比不足，僅供觀察</span>") + (p.rr > 5 ? "<span>風報比偏高，目標距離遠，請保守看待</span>" : "") + "</div>" +
       '<div class="plan-foot"><span>' + esc(p.note) + "</span>" + fibLine + "</div></div>";
   }
 
@@ -295,11 +296,11 @@ button:focus-visible, select:focus-visible, input:focus-visible, summary:focus-v
 
   function vPlan() {
     var k = S.strat, st = S.data.stocks.filter(function (s) { var g = s.sig[k]; return g && g.plan && (!S.okOnly || g.plan.ok); });
-    st.sort(function (a, b) { return b.sig[k].plan.rr - a.sig[k].plan.rr || b.sig[k].score - a.sig[k].score; });
+    st.sort(function (a, b) { return b.sig[k].score - a.sig[k].score || b.sig[k].plan.rr - a.sig[k].plan.rr; });
     var body = st.slice(0, 40).map(function (s, i) {
       return '<li class="row"><div class="rk' + (i < 3 ? " top3" : "") + '">' + (i + 1) + "</div>" + nameCell(s) + priceCell(s) + tagsHtml(s) + planBlock(s) + "</li>";
     }).join("") || emptyLi("目前沒有符合條件的進出場規劃。可以關掉「只看風險報酬比 1.5 以上」查看全部。");
-    return '<section class="panel"><div class="panel-head"><div><h3>進出場分析<span>' + st.length + "</span></h3><p>止損距離上限 7%，預估持有 2 到 15 個交易日</p></div></div>" +
+    return '<section class="panel"><div class="panel-head"><div><h3>進出場分析<span>' + st.length + "</span></h3><p>依訊號分排序。止損至少 2% 或 1 個 ATR、最多 7%。漲停鎖住的股票不給進場價。</p></div></div>" +
       '<div class="controls"><button class="chip" id="okonly" type="button" aria-pressed="' + S.okOnly + '">只看風險報酬比 1.5 以上</button></div><ol class="list">' + body + "</ol></section>";
   }
 

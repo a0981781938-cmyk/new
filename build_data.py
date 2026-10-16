@@ -28,6 +28,10 @@ HOLD_MIN, HOLD_MAX = 2, 15
 MIN_RR = 1.5               # 風險報酬比達此值才標示為「可規劃」
 LOG_KEEP_DAYS = 120
 NO_FILL_DAYS = 5
+MIN_STOP_PCT = 0.02        # 止損距離至少 2%，且至少 1 個 ATR，避免被一天的正常波動洗出去
+MIN_CLOSE_POS = 0.5        # 回踩確認：收盤要在當日區間的上半部
+MAX_DROP = -3.0            # 回踩確認：當日跌幅超過 3% 不算止跌
+PLAN_VERSION = 2           # 進出場規則版本。版本不同的舊訊號紀錄會被丟棄，避免混入舊規則的結果
 
 UA = {"User-Agent": "Mozilla/5.0 (tw-radar)"}
 
@@ -204,6 +208,7 @@ def features(S):
     n = len(c)
     i = n - 1
     f = {"close": c[-1], "prev": c[-2], "pct": (c[-1] / c[-2] - 1) * 100}
+    f["locked"] = c[-1] > c[-2] and c[-1] >= r_down(c[-2] * 1.10) - 1e-6   # 收在漲停價，隔日通常追不到
     f["ma5"], f["ma20"] = sma_at(c, 5, i), sma_at(c, 20, i)
     f["ma5p"], f["ma20_3"] = sma_at(c, 5, i - 1), sma_at(c, 20, i - 3)
     f["slope"] = f["ma20"] / f["ma20_3"] - 1
@@ -239,26 +244,34 @@ def golden(c, i):
 
 def make_plan(f, entry, struct_stop, target, note=""):
     entry = r_near(entry)
-    stop, capped = struct_stop, False
+    min_dist = max(entry * MIN_STOP_PCT, f["atr"])     # 止損至少離進場價 2% 或 1 個 ATR
+    stop, widened, capped = struct_stop, False, False
+    if entry - stop < min_dist:
+        stop, widened = entry - min_dist, True
     if entry - stop > entry * MAX_RISK:
         stop, capped = entry * (1 - MAX_RISK), True
-    stop = r_down(stop)
+    stop = r_up(stop) if capped else r_down(stop)      # 碰到 7% 上限時往進場價方向取整，確保不超過上限
     if stop >= entry:
         return None
     risk = entry - stop
     t1 = r_near(max(target, entry + risk))
-    t2 = r_near(max(t1, entry + 3 * risk))
+    t2 = r_near(max(entry + 3 * risk, t1 + risk))      # 目標二一定高過目標一
     rr = (t1 - entry) / risk
     days = int(min(HOLD_MAX, max(HOLD_MIN, round((t1 - entry) / (f["atr"] * 0.6)))))
     return {
         "entry": entry, "stop": stop, "t1": t1, "t2": t2, "rr": round(rr, 2),
-        "risk_pct": round(risk / entry * 100, 1), "hold": days, "capped": capped,
+        "risk_pct": round(risk / entry * 100, 1), "hold": days, "capped": capped, "widened": widened,
         "ok": rr >= MIN_RR, "note": note,
     }
 
 
 def clamp(x, lo=0, hi=100):
     return max(lo, min(hi, x))
+
+
+def confirmed(f):
+    """回踩確認：當日沒有大跌，且收盤在當日區間的上半部。"""
+    return f["pct"] > MAX_DROP and f["pos"] >= MIN_CLOSE_POS
 
 
 # ---------- 策略 A：均線突破（5MA、20MA、成交量） ----------
@@ -277,7 +290,7 @@ def strat_A(f, S):
         sc = 50 + min((f["vr5"] - 1.3) * 15, 20) + clamp(slope * 1000, 0, 10) + (10 if f["pos"] >= 0.7 else 0) + (10 if cross and gold else 0)
         return {"type": "breakout", "score": round(clamp(sc)), "tags": tags, "plan": make_plan(f, close, stop, target, "跌回20MA下方視為失敗")}
     past = any(crossed_up(c, i - k) for k in range(3, 13))
-    if past and ma20 * 0.995 <= close <= ma20 * 1.03 and min(l[-2:]) <= ma20 * 1.01 and slope > 0 and v[-1] < avg(v[-6:-1]) * 0.9:
+    if past and ma20 * 0.995 <= close <= ma20 * 1.03 and min(l[-2:]) <= ma20 * 1.01 and slope > 0 and v[-1] < avg(v[-6:-1]) * 0.9 and confirmed(f):
         sc = 55 + clamp(slope * 1000, 0, 10) + (10 if v[-1] < avg(v[-6:-1]) * 0.7 else 0) + (10 if f["ma5"] > ma20 else 0)
         return {"type": "pullback", "score": round(clamp(sc)), "tags": ["回測20MA", "量縮%.0f%%" % (v[-1] / avg(v[-6:-1]) * 100)],
                 "plan": make_plan(f, close, ma20 * 0.985, max(h[-12:]), "收盤跌破20MA即出場")}
@@ -318,7 +331,7 @@ def strat_B(f, S):
             break
         rh, rl, rw = platform(h, l, j - 1)
         if c[j] > rh and v[j] >= avg(v[j - 20:j]) * 1.3 and rw <= 0.18:
-            near = min(l[-3:]) <= rh * 1.02 and close >= rh * 0.99 and close <= rh * 1.05
+            near = min(l[-3:]) <= rh * 1.02 and close >= rh and close <= rh * 1.05 and confirmed(f)
             shrink = avg(v[-3:]) < v[j] * 0.8
             if near and shrink:
                 sc = 55 + (10 if higher_lows else 0) + (10 if avg(v[-3:]) < v[j] * 0.6 else 0) + (10 if close >= rh else 0) + (5 if rw <= 0.12 else 0)
@@ -377,6 +390,8 @@ def strat_C(f, S, a, b):
     if not typ and fib_zone and close > f["ma20"] * 0.99:
         typ = "pullback"
     if not typ or total < 55:
+        return None
+    if typ == "pullback" and not confirmed(f):
         return None
     base = b or a
     tags = ["綜合%d" % total] + ([fib_tag] if fib_tag else [])
@@ -456,12 +471,17 @@ def analyse(hist, ex, upto=None):
             continue
         A, B = strat_A(f, S), strat_B(f, S)
         C = strat_C(f, S, A, B)
+        if f["locked"]:                                  # 漲停鎖住：保留訊號，但不給進場價
+            for sgn in (A, B, C):
+                if sgn:
+                    sgn["plan"] = None
+                    sgn["locked"] = True
         stocks.append({
             "code": code, "name": hist["names"].get(code, code), "close": f["close"], "pct": round(f["pct"], 2),
             "val": S["a"][-1], "vol": S["v"][-1], "vr5": round(f["vr5"], 2), "vchg": round(f["vchg"] * 100, 1),
             "avgval20": round(f["avgval20"]), "ma5": round(f["ma5"], 2), "ma20": round(f["ma20"], 2),
             "trend": f["trend"], "strong": f["strong"], "ret5": round(f["ret5"] * 100, 1), "ret20": round(f["ret20"] * 100, 1),
-            "attention": code in ex["attention"], "sig": {"A": A, "B": B, "C": C},
+            "attention": code in ex["attention"], "locked": f["locked"], "sig": {"A": A, "B": B, "C": C},
         })
     up = sum(1 for s in stocks if s["pct"] > 0)
     meta = {"date": last, "scanned": scanned, "passed": len(stocks), "skipped": skip, "up": up, "down": sum(1 for s in stocks if s["pct"] < 0)}
@@ -509,6 +529,7 @@ def simulate(entry_row, bars):
 
 
 def update_log(log, stocks, hist, signal_date):
+    log[:] = [x for x in log if x.get("pv") == PLAN_VERSION]   # 丟棄舊規則產生的紀錄
     days = hist["days"]
     ds = sorted(days)
     have = {(x["date"], x["code"], x["strategy"]) for x in log}
@@ -523,7 +544,7 @@ def update_log(log, stocks, hist, signal_date):
             if key in have or (prev and (dt.date.fromisoformat(signal_date) - dt.date.fromisoformat(prev)).days < 10):
                 continue
             p = sg["plan"]
-            log.append({"date": signal_date, "code": s["code"], "name": s["name"], "strategy": strat, "type": sg["type"], "score": sg["score"],
+            log.append({"pv": PLAN_VERSION, "date": signal_date, "code": s["code"], "name": s["name"], "strategy": strat, "type": sg["type"], "score": sg["score"],
                         "ref": s["close"], "entry": p["entry"], "stop": p["stop"], "t1": p["t1"], "rr": p["rr"], "ok": p["ok"], "tags": sg["tags"][:3]})
     for x in log:
         later = [d for d in ds if d > x["date"]]
