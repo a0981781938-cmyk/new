@@ -33,6 +33,11 @@ MIN_CLOSE_POS = 0.5        # 回踩確認：收盤要在當日區間的上半部
 MAX_DROP = -3.0            # 回踩確認：當日跌幅超過 3% 不算止跌
 PLAN_VERSION = 2           # 進出場規則版本。版本不同的舊訊號紀錄會被丟棄，避免混入舊規則的結果
 
+MIN_SCANNED = 700          # 上市普通股檔數低於此值視為資料異常，不覆寫舊檔
+HIST_PATH = os.path.join(DATA, "history.json")
+LOG_PATH = os.path.join(DATA, "signal_log.json")
+OUT_PATH = os.path.join(ROOT, "data.json")
+
 UA = {"User-Agent": "Mozilla/5.0 (tw-radar)"}
 
 
@@ -100,9 +105,12 @@ def load_json(path, default):
 
 
 def save_json(path, obj, compact=True):
+    """先寫暫存檔再替換，避免寫到一半失敗時留下壞檔。"""
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(obj, f, ensure_ascii=False, separators=(",", ":") if compact else None, indent=None if compact else 1)
+    os.replace(tmp, path)
 
 
 # ---------- 抓資料 ----------
@@ -111,11 +119,28 @@ def is_common_stock(code):
     return bool(re.fullmatch(r"\d{4}", code)) and not code.startswith("00") and not code.startswith("91")
 
 
+NO_DATA_MARK = "沒有符合條件"   # 證交所休市日的回應文字。未實測確認；若文字不同會歸為 unknown，不會寫入假日清單
+
+
+def signed_change(r, ix):
+    """漲跌價差（帶正負號）。欄位不存在時回傳 None。"""
+    if "漲跌價差" not in ix or "漲跌(+/-)" not in ix:
+        return None
+    val = num(r[ix["漲跌價差"]])
+    if val is None:
+        return None
+    sign_txt = re.sub(r"<[^>]+>", "", str(r[ix["漲跌(+/-)"]]))
+    return -abs(val) if ("-" in sign_txt or "▼" in sign_txt) else abs(val)
+
+
 def fetch_day(d):
+    """回傳 (行情, 名稱, 狀態)。狀態：ok / holiday（確定休市）/ unknown（異常，不能當成休市）。
+    行情每檔格式：[開, 高, 低, 收, 成交股數, 成交金額, 漲跌價差]。"""
     url = "https://www.twse.com.tw/rwd/zh/afterTrading/MI_INDEX?date=%s&type=ALLBUT0999&response=json" % d.strftime("%Y%m%d")
     j = get_json(url)
-    if j.get("stat") != "OK":
-        return None, {}
+    stat = str(j.get("stat", ""))
+    if stat != "OK":
+        return None, {}, ("holiday" if NO_DATA_MARK in stat else "unknown")
     for t in j.get("tables") or []:
         f = t.get("fields") or []
         if "證券代號" in f and "收盤價" in f:
@@ -129,10 +154,10 @@ def fetch_day(d):
                 v, a = num(r[ix["成交股數"]]), num(r[ix["成交金額"]])
                 if None in (o, h, l, c, v, a) or c <= 0 or v <= 0:
                     continue
-                out[code] = [o, h, l, c, v, a]
+                out[code] = [o, h, l, c, v, a, signed_change(r, ix)]
                 names[code] = str(r[ix["證券名稱"]]).strip()
-            return out, names
-    return None, {}
+            return out, names, "ok"
+    return None, {}, "unknown"
 
 
 def collect_history(cache, today):
@@ -143,13 +168,15 @@ def collect_history(cache, today):
         tries += 1
         key = d.strftime("%Y-%m-%d")
         if d.weekday() < 5 and key not in days and key not in hol:
-            data, nm = fetch_day(d)
+            data, nm, kind = fetch_day(d)
             if data:
                 days[key] = data
                 names.update(nm)
                 print("fetched", key, len(data), file=sys.stderr)
-            elif d < today:
-                hol.append(key)
+            elif kind == "holiday" and d < today:
+                hol.append(key)                      # 只有確定休市才記入假日清單
+            elif kind == "unknown":
+                print("行情回應異常，不記為休市，下次執行會重試", key, file=sys.stderr)
             time.sleep(3.2)  # 證交所對連續請求有限流
         d -= dt.timedelta(days=1)
     for k in sorted(days)[:-HISTORY_DAYS]:
@@ -188,7 +215,7 @@ def fetch_excluded():
     for key, url in {**EXCLUDE_SOURCES, **EXTRA_URLS}.items():
         try:
             ex[key] = extract_codes(get_json(url))
-            status[key] = "ok:%d" % len(ex[key])
+            status[key] = ("ok:%d" % len(ex[key])) if ex[key] else "empty"   # 空清單視為格式異常，不靜默通過
         except Exception as e:  # noqa: BLE001
             status[key] = "fail"
             print("exclude source failed", key, e, file=sys.stderr)
@@ -445,7 +472,8 @@ def analyse(hist, ex, upto=None):
     ds = sorted(days)
     upto = len(ds) - 1 if upto is None else upto
     last = ds[upto]
-    skip = {"low_volume": 0, "low_price": 0, "punish": 0, "full_delivery": 0, "manual": 0, "short_history": 0}
+    skip = {"low_volume": 0, "low_price": 0, "punish": 0, "full_delivery": 0, "manual": 0, "short_history": 0,
+            "corp_action": 0, "mismatch": 0, "no_chg": 0}
     stocks, scanned = [], 0
     for code in days[last]:
         scanned += 1
@@ -464,6 +492,15 @@ def analyse(hist, ex, upto=None):
             continue
         if S["c"][-1] < MIN_PRICE:
             skip["low_price"] += 1
+            continue
+        if any(abs(S["c"][k] / S["c"][k - 1] - 1) > 0.105 for k in range(max(1, len(S["c"]) - 60), len(S["c"]))):
+            skip["corp_action"] += 1       # 單日漲跌超過 10% 漲跌幅上限，代表除權息或資料異常，不分析
+            continue
+        chg = days[last][code][6] if len(days[last][code]) > 6 else None
+        if chg is None:
+            skip["no_chg"] += 1            # 證交所未提供漲跌價差，無法交叉檢查
+        elif len(S["c"]) >= 2 and abs(S["c"][-1] - chg - S["c"][-2]) > 0.011:
+            skip["mismatch"] += 1          # 收盤 − 漲跌價差 ≠ 前日收盤：前日缺漏或除權息當天
             continue
         f = features(S)
         if f["avgval20"] < MIN_AVG_VALUE or f["avglots20"] < MIN_AVG_LOTS:
@@ -533,7 +570,11 @@ def update_log(log, stocks, hist, signal_date):
     days = hist["days"]
     ds = sorted(days)
     have = {(x["date"], x["code"], x["strategy"]) for x in log}
-    recent = {(x["code"], x["strategy"]): x["date"] for x in log}
+    recent = {}                                          # 同一檔同一策略取最近一次的日期
+    for x in log:
+        k = (x["code"], x["strategy"])
+        if k not in recent or x["date"] > recent[k]:
+            recent[k] = x["date"]
     for s in stocks:
         for strat in ("A", "B", "C"):
             sg = s["sig"][strat]
@@ -652,6 +693,7 @@ def demo_history(seed=7, n=HISTORY_DAYS):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--demo", action="store_true")
+    ap.add_argument("--force", action="store_true", help="即使 data.json 已是今日資料也重寫")
     ap.add_argument("--out", default=os.path.join(ROOT, "data.json"))
     args = ap.parse_args()
     tz_today = (dt.datetime.utcnow() + dt.timedelta(hours=8)).date()
@@ -668,17 +710,35 @@ def main():
         log = update_log(log, stocks, hist, sd)
         meta["demo"] = True
     else:
-        hist = load_json(os.path.join(DATA, "history.json"), {})
+        hist = load_json(HIST_PATH, {})
         hist = collect_history(hist, tz_today)
         if not hist.get("days"):
             sys.exit("沒有取得任何行情資料")
-        save_json(os.path.join(DATA, "history.json"), hist)
+        save_json(HIST_PATH, hist)
+        today_key = tz_today.strftime("%Y-%m-%d")
+        last_key = max(hist["days"])
+        if last_key != today_key:
+            # 今天休市或證交所還沒公布：保留現有 data.json，不算失敗（排程 16:10、16:40 會再試）
+            print("今日（%s）尚無行情，最新為 %s，保留現有 data.json" % (today_key, last_key), file=sys.stderr)
+            return
+        if load_json(OUT_PATH, {}).get("meta", {}).get("date") == today_key and not args.force:
+            print("data.json 已是今日資料，不重寫", file=sys.stderr)
+            return
         ex, status = fetch_excluded()
-        log = load_json(os.path.join(DATA, "signal_log.json"), [])
+        log = load_json(LOG_PATH, [])
         stocks, meta, sd = analyse(hist, ex)
+        problems = []
+        if meta["scanned"] < MIN_SCANNED:
+            problems.append("上市普通股僅 %d 檔" % meta["scanned"])
+        if meta["skipped"]["mismatch"] > 0.2 * max(meta["scanned"], 1):
+            problems.append("收盤與漲跌價差不一致者過多（%d 檔）" % meta["skipped"]["mismatch"])
+        if problems:
+            sys.exit("資料檢查失敗，保留舊的 data.json：" + "；".join(problems))
         log = update_log(log, stocks, hist, sd)
-        save_json(os.path.join(DATA, "signal_log.json"), log)
+        save_json(LOG_PATH, log)
         meta["demo"] = False
+        meta["checks"] = {"history_days": len(hist["days"]), "last_fetch": last_key, "today": today_key,
+                          "chg_checked": meta["scanned"] - meta["skipped"]["no_chg"]}
     meta["sources"] = status
     meta["generated"] = (dt.datetime.utcnow() + dt.timedelta(hours=8)).strftime("%Y-%m-%d %H:%M")
     meta["params"] = {"min_avg_value": MIN_AVG_VALUE, "min_avg_lots": MIN_AVG_LOTS, "min_price": MIN_PRICE, "max_risk": MAX_RISK, "min_rr": MIN_RR,

@@ -257,7 +257,7 @@ button:focus-visible, select:focus-visible, input:focus-visible, summary:focus-v
       '<div class="stat"><div class="k">掃描上市股票</div><div class="v">' + m.scanned + '</div><div class="s">通過排除 ' + m.passed + " 檔</div></div>" +
       '<div class="stat"><div class="k">上漲 / 下跌</div><div class="v"><span style="color:var(--up)">' + m.up + '</span> / <span style="color:var(--down)">' + m.down + '</span></div><div class="s">通過排除的股票</div></div>' +
       '<div class="stat"><div class="k">目前訊號</div><div class="v">' + sig.length + '</div><div class="s">策略 ' + k + "</div></div>" +
-      '<div class="stat"><div class="k">資料日期</div><div class="v">' + m.date.slice(5).replace("-", "/") + '</div><div class="s">收盤資料 · 台北</div></div></div>';
+      '<div class="stat"><div class="k">資料日期</div><div class="v">' + m.date.slice(5).replace("-", "/") + '</div><div class="s">收盤資料 · 產生 ' + esc(m.generated || "") + '</div></div></div>';
     html += panel("目前強勢", strong.length, "漲幅、量比與趨勢強度綜合排序", strong.map(function (s, i) { return row(i, s, mStrong(s), true); }).join("") || emptyLi("今天沒有上漲的股票。"), "strong");
     html += panel("即將突破", pre.length, "接近壓力或 20MA，尚未大幅拉升", pre.slice(0, 5).map(function (s, i) { return row(i, s, mSig(s), true); }).join("") || emptyLi("目前沒有符合的股票。"), "signals");
     html += panel("突破後回踩", pb.length, "回到壓力轉支撐，可規劃進場與止損", pb.slice(0, 5).map(function (s, i) { return row(i, s, mSig(s), true) + ""; }).join("") || emptyLi("目前沒有符合的股票。"), "plan");
@@ -339,9 +339,14 @@ button:focus-visible, select:focus-visible, input:focus-visible, summary:focus-v
     if (m.demo) out += '<div class="notice">目前是模擬資料，股票名稱與價格都是虛構的，只用來預覽版面與策略邏輯。正式資料請執行 build_data.py 產生。</div>';
     var src = m.sources || {};
     var bad = [];
-    if (src.punish === "fail") bad.push("處置股名單取得失敗");
+    if (src.punish === "fail" || src.punish === "empty") bad.push("處置股名單取不到或格式異常");
     if (src.full_delivery === "not_configured") bad.push("全額交割股名單尚未設定來源");
     if (bad.length && !m.demo) out += '<div class="notice">' + bad.join("，") + "。目前以「股價 10 元以上」「成交量門檻」與 data/exclude.txt 手動名單代替，請留意。</div>";
+    if (!m.demo) {
+      var nowTw = new Date().toLocaleDateString("sv-SE", { timeZone: "Asia/Taipei" });
+      var lag = (new Date(nowTw) - new Date(m.date)) / 86400000;
+      if (lag > 4) out += '<div class="notice">資料日期 ' + m.date + "，已超過 4 天未更新，請檢查 GitHub Actions 的 update-data 是否失敗。</div>";
+    }
     return out;
   }
 
