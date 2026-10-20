@@ -525,7 +525,14 @@ def analyse(hist, ex, upto=None):
                 if sgn:
                     sgn["plan"] = None
                     sgn["locked"] = True
+        # 第四優先：回踩追蹤狀態（依目前最高分的訊號）
+        best = max([x for x in (A, B, C) if x], key=lambda x: x["score"], default=None)
+        track = None
+        if best:
+            track = {"breakout": "已突破", "pre": "待突破",
+                     "pullback": "回踩確認可進" if confirmed(f) else "回踩中"}[best["type"]]
         stocks.append({
+            "track": track,
             "code": code, "name": hist["names"].get(code, code), "close": f["close"], "pct": round(f["pct"], 2),
             "val": S["a"][-1], "vol": S["v"][-1], "vr5": round(f["vr5"], 2), "vchg": round(f["vchg"] * 100, 1),
             "avgval20": round(f["avgval20"]), "ma5": round(f["ma5"], 2), "ma20": round(f["ma20"], 2),
@@ -769,6 +776,14 @@ def main():
     meta["generated"] = (dt.datetime.utcnow() + dt.timedelta(hours=8)).strftime("%Y-%m-%d %H:%M")
     meta["params"] = {"min_avg_value": MIN_AVG_VALUE, "min_avg_lots": MIN_AVG_LOTS, "min_price": MIN_PRICE, "max_risk": MAX_RISK, "min_rr": MIN_RR,
                       "hold": [HOLD_MIN, HOLD_MAX]}
+    # 跌破支撐：已有進行中的訊號（待成交或持有中），而且收盤已跌到它的止損價之下
+    open_stops = {}
+    for x in log:
+        if x.get("status") in ("pending", "holding") and x.get("stop"):
+            open_stops.setdefault(x["code"], x["stop"])
+    for s in stocks:
+        if s["code"] in open_stops and s["close"] <= open_stops[s["code"]]:
+            s["track"] = "跌破支撐（失效）"
     stocks.sort(key=lambda s: s["strong"], reverse=True)
     save_json(args.out, {"meta": meta, "stocks": stocks, "log": log})
     n_sig = {k: sum(1 for s in stocks if s["sig"][k]) for k in "ABC"}

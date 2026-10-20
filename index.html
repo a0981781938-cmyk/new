@@ -213,6 +213,7 @@ button:focus-visible, select:focus-visible, input:focus-visible, summary:focus-v
     var g = sg(s), t = "";
     if (g) t += '<span class="tag t-' + g.type + '">' + TYPE[g.type] + "</span>" + g.tags.map(function (x) { return '<span class="tag">' + esc(x) + "</span>"; }).join("");
     if (s.locked) t += '<span class="tag t-breakout">漲停鎖住，隔日難追</span>';
+    if (s.track) t += '<span class="tag' + (s.track.indexOf("跌破") > -1 ? ' warn' : '') + '">' + esc(s.track) + "</span>";
     if (s.attention) t += '<span class="tag warn">注意股</span>';
     return t ? '<div class="tags">' + t + "</div>" : "";
   }
