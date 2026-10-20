@@ -730,11 +730,10 @@ def main():
         today_key = tz_today.strftime("%Y-%m-%d")
         last_key = max(hist["days"])
         if last_key != today_key:
-            # 今天休市或證交所還沒公布：保留現有 data.json，不算失敗（排程 16:10、16:40 會再試）
-            print("::warning title=今日無行情::今日（%s）證交所無資料，最新為 %s，保留現有 data.json" % (today_key, last_key), file=sys.stderr)
-            return
-        if load_json(OUT_PATH, {}).get("meta", {}).get("date") == today_key and not args.force:
-            print("data.json 已是今日資料，不重寫", file=sys.stderr)
+            # 今天還沒有行情（尚未公布或休市）：仍以最新一個交易日更新，不因此失敗
+            print("::warning title=今日無行情::今日（%s）證交所尚無資料，使用最新交易日 %s" % (today_key, last_key), file=sys.stderr)
+        if load_json(OUT_PATH, {}).get("meta", {}).get("date") == last_key and not args.force:
+            print("data.json 已是最新交易日資料（%s），不重寫" % last_key, file=sys.stderr)
             return
         ex, status = fetch_excluded()
         log = load_json(LOG_PATH, [])
