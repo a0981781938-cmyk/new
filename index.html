@@ -251,8 +251,8 @@ button:focus-visible, select:focus-visible, input:focus-visible, summary:focus-v
     var d = S.data, m = d.meta, st = d.stocks, k = S.strat;
     var sk = m.skipped, sig = st.filter(function (s) { return s.sig[k]; });
     var strong = st.filter(function (s) { return s.pct > 0; }).sort(function (a, b) { return b.strong - a.strong; }).slice(0, 5);
-    var pre = sig.filter(function (s) { return s.sig[k].type === "pre"; }).sort(function (a, b) { return b.sig[k].score - a.sig[k].score; });
-    var pb = sig.filter(function (s) { return s.sig[k].type === "pullback"; }).sort(function (a, b) { return b.sig[k].score - a.sig[k].score; });
+    var pre = sig.filter(function (s) { return s.sig[k].type === "pre" && !s.ext; }).sort(function (a, b) { return b.sig[k].score - a.sig[k].score; });
+    var pb = sig.filter(function (s) { return s.sig[k].type === "pullback" && !s.ext; }).sort(function (a, b) { return b.sig[k].score - a.sig[k].score; });
     var html = '<div class="stats">' +
       '<div class="stat"><div class="k">掃描上市股票</div><div class="v">' + m.scanned + '</div><div class="s">通過排除 ' + m.passed + " 檔</div></div>" +
       '<div class="stat"><div class="k">上漲 / 下跌</div><div class="v"><span style="color:var(--up)">' + m.up + '</span> / <span style="color:var(--down)">' + m.down + '</span></div><div class="s">通過排除的股票</div></div>' +
@@ -278,9 +278,11 @@ button:focus-visible, select:focus-visible, input:focus-visible, summary:focus-v
 
   function vSignals() {
     var k = S.strat, st = S.data.stocks.filter(function (s) { return s.sig[k] && (S.type === "all" || s.sig[k].type === S.type); });
-    st.sort(function (a, b) { return b.sig[k].score - a.sig[k].score; });
+    st.sort(function (a, b) { return (b.sig[k].rank || 0) - (a.sig[k].rank || 0) || b.sig[k].score - a.sig[k].score; });
     var chips = [["all", "全部"], ["breakout", "突破"], ["pre", "即將突破"], ["pullback", "回踩確認"]].map(function (t) { return '<button class="chip" type="button" data-type="' + t[0] + '" aria-pressed="' + (S.type === t[0]) + '">' + t[1] + "</button>"; }).join("");
-    var body = st.slice(0, 60).map(function (s, i) { return row(i, s, mSig(s), true); }).join("") || emptyLi("目前沒有符合的訊號。");
+    var fresh = st.filter(function (s) { return !s.ext; }), ext = st.filter(function (s) { return s.ext; });
+    var body = fresh.slice(0, 60).map(function (s, i) { return row(i, s, mSig(s), true); }).join("") || emptyLi("目前沒有未大幅拉升的訊號。");
+    if (ext.length) body += '<li class="empty">已大幅拉升，僅觀察、不建議追價（' + ext.length + " 檔）</li>" + ext.slice(0, 30).map(function (s, i) { return row(i, s, mSig(s), true); }).join("");
     return '<section class="panel"><div class="panel-head"><div><h3>技術訊號<span>' + st.length + "</span></h3><p>" + esc(STRAT[k]) + '</p></div></div><div class="controls">' + chips + '</div><ol class="list">' + body + "</ol></section>";
   }
 

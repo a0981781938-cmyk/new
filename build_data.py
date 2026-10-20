@@ -532,6 +532,21 @@ def analyse(hist, ex, upto=None):
             "trend": f["trend"], "strong": f["strong"], "ret5": round(f["ret5"] * 100, 1), "ret20": round(f["ret20"] * 100, 1),
             "attention": code in ex["attention"], "locked": f["locked"], "sig": {"A": A, "B": B, "C": C},
         })
+    # 第二、三優先：拉升程度與綜合排序分數（每個訊號一個 rank，0–100）
+    for s in stocks:
+        s["ext"] = s["close"] / s["ma20"] - 1 > 0.10 or s["ret5"] > 12          # 已大幅拉升：離 20MA 太遠或 5 日漲太多
+        for sg in s["sig"].values():
+            if not sg:
+                continue
+            lvl = sg.get("level") or s["ma20"]
+            dist = (s["close"] / lvl - 1) * 100                                # 相對突破位（或 20MA）的距離，%
+            if sg["type"] == "breakout" and dist > 5:
+                s["ext"] = True                                                # 突破後已超過 5%，屬於已拉升
+            dist_score = max(0.0, 1 - abs(dist) / 5)                           # 越接近突破位（剛突破、回踩）分數越高
+            rr_score = min(sg["plan"]["rr"], 3) / 3 if sg.get("plan") else 0.0
+            vol_score = min(max(s["vr5"], 0) / 3, 1)
+            sg["dist"] = round(dist, 1)
+            sg["rank"] = round(100 * (0.35 * s["trend"] / 100 + 0.20 * vol_score + 0.25 * dist_score + 0.20 * rr_score))
     up = sum(1 for s in stocks if s["pct"] > 0)
     meta = {"date": last, "scanned": scanned, "passed": len(stocks), "skipped": skip, "up": up, "down": sum(1 for s in stocks if s["pct"] < 0)}
     return stocks, meta, ds[upto]
