@@ -38,7 +38,12 @@ HIST_PATH = os.path.join(DATA, "history.json")
 LOG_PATH = os.path.join(DATA, "signal_log.json")
 OUT_PATH = os.path.join(ROOT, "data.json")
 
-UA = {"User-Agent": "Mozilla/5.0 (tw-radar)"}
+UA = {                                                  # 送出瀏覽器格式的標頭，證交所對機器人標頭可能回傳不同結果
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "zh-TW,zh;q=0.9,en;q=0.8",
+    "Referer": "https://www.twse.com.tw/",
+}
 
 
 # ---------- 小工具 ----------
@@ -140,6 +145,7 @@ def fetch_day(d):
     j = get_json(url)
     stat = str(j.get("stat", ""))
     if stat != "OK":
+        print("證交所回覆", d.strftime("%Y-%m-%d"), "stat =", stat, file=sys.stderr)   # 留下原始回應，方便排查
         return None, {}, ("holiday" if NO_DATA_MARK in stat else "unknown")
     for t in j.get("tables") or []:
         f = t.get("fields") or []
@@ -169,6 +175,11 @@ def collect_history(cache, today):
         key = d.strftime("%Y-%m-%d")
         if d.weekday() < 5 and key not in days and key not in hol:
             data, nm, kind = fetch_day(d)
+            for _ in range(2):                          # 今天的資料可能還在公布，等一下再試
+                if data or kind != "holiday" or d != today:
+                    break
+                time.sleep(30)
+                data, nm, kind = fetch_day(d)
             if data:
                 days[key] = data
                 names.update(nm)
@@ -719,7 +730,7 @@ def main():
         last_key = max(hist["days"])
         if last_key != today_key:
             # 今天休市或證交所還沒公布：保留現有 data.json，不算失敗（排程 16:10、16:40 會再試）
-            print("今日（%s）尚無行情，最新為 %s，保留現有 data.json" % (today_key, last_key), file=sys.stderr)
+            print("::warning title=今日無行情::今日（%s）證交所無資料，最新為 %s，保留現有 data.json" % (today_key, last_key), file=sys.stderr)
             return
         if load_json(OUT_PATH, {}).get("meta", {}).get("date") == today_key and not args.force:
             print("data.json 已是今日資料，不重寫", file=sys.stderr)
