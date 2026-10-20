@@ -170,7 +170,8 @@ def collect_history(cache, today):
     days, hol, names = cache.setdefault("days", {}), cache.setdefault("holidays", []), cache.setdefault("names", {})
     d, tries = today, 0
     have = lambda: len([k for k in days])  # noqa: E731
-    while have() < HISTORY_DAYS and tries < 130:
+    last_cached = max(days) if days else ""  # 快取裡最新的日期；比它新的日子都要抓
+    while tries < 130 and (have() < HISTORY_DAYS or (last_cached and d.strftime("%Y-%m-%d") > last_cached)):
         tries += 1
         key = d.strftime("%Y-%m-%d")
         if d.weekday() < 5 and key not in days and key not in hol:
