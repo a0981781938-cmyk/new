@@ -1,9 +1,9 @@
 name: update-data
 on:
   schedule:
-    - cron: "40 7 * * 1-5"    # 台北 15:40
-    - cron: "10 8 * * 1-5"    # 台北 16:10
-    - cron: "40 8 * * 1-5"    # 台北 16:40
+    - cron: "0 7 * * 1-5"     # 台北 15:00，主要更新時間
+    - cron: "10 8 * * 1-5"    # 台北 16:10，證交所晚公布時補抓
+    - cron: "40 8 * * 1-5"    # 台北 16:40，最後一次補抓
   workflow_dispatch:
 permissions:
   contents: write
@@ -19,7 +19,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: 還原歷史行情快取
+      - name: 還原歷史行情快取（不再提交到 git）
         uses: actions/cache@v4
         with:
           path: data/history.json
@@ -27,7 +27,7 @@ jobs:
           restore-keys: history-
       - name: 產生資料
         run: python build_data.py
-      - name: 提交結果
+      - name: 提交結果（沒有變更就不提交）
         run: |
           git config user.name "radar-bot"
           git config user.email "radar-bot@users.noreply.github.com"
