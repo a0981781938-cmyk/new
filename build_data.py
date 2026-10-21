@@ -166,15 +166,24 @@ def fetch_day(d):
     return None, {}, "unknown"
 
 
+# 2026 年證交所休市日（來源：經濟日報〈證交所行事曆出爐〉）。這些日子不發送請求，直接略過。
+HOLIDAYS_KNOWN = {
+    "2026-01-01", "2026-02-12", "2026-02-13", "2026-02-16", "2026-02-17", "2026-02-18", "2026-02-19", "2026-02-20",
+    "2026-02-27", "2026-04-03", "2026-04-06", "2026-05-01", "2026-06-19", "2026-09-25", "2026-09-28",
+    "2026-10-09", "2026-10-26", "2026-12-25",
+}
+
+
 def collect_history(cache, today):
     days, hol, names = cache.setdefault("days", {}), cache.setdefault("holidays", []), cache.setdefault("names", {})
     d, tries = today, 0
     have = lambda: len([k for k in days])  # noqa: E731
     last_cached = max(days) if days else ""  # 快取裡最新的日期；比它新的日子都要抓
-    while tries < 130 and (have() < HISTORY_DAYS or (last_cached and d.strftime("%Y-%m-%d") > last_cached)):
+    # tries 以「日曆日」計算：一年約 250 個交易日，需要的日曆日數遠多於交易日數，上限要放寬
+    while tries < 600 and (have() < HISTORY_DAYS or (last_cached and d.strftime("%Y-%m-%d") > last_cached)):
         tries += 1
         key = d.strftime("%Y-%m-%d")
-        if d.weekday() < 5 and key not in days and key not in hol:
+        if d.weekday() < 5 and key not in days and key not in hol and key not in HOLIDAYS_KNOWN:
             data, nm, kind = fetch_day(d)
             for _ in range(2):                          # 今天的資料可能還在公布，等一下再試
                 if data or kind != "holiday" or d != today:
