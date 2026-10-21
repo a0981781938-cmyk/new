@@ -1,6 +1,11 @@
 name: backtest
 on:
   workflow_dispatch:
+    inputs:
+      days:
+        description: "回測的訊號交易日數（126≈6 個月，250≈12 個月）"
+        required: true
+        default: "126"
 permissions:
   contents: write
 concurrency:
@@ -9,14 +14,14 @@ concurrency:
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: 執行回測（約一個月的訊號）
-        run: python backtest.py
+      - name: 執行回測
+        run: python backtest.py --days ${{ inputs.days }}
       - name: 提交回測結果
         run: |
           git config user.name "radar-bot"
