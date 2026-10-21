@@ -23,6 +23,7 @@ FORWARD_DAYS = 15  # 每個訊號日之後保留的觀察天數，確保能結�
 DEDUP_DAYS = 10    # 同一檔同一策略，幾個交易日內只取一次訊號
 MODES = ("full", "half", "half_be")
 MODE_NAME = {"full": "全部目標一出場", "half": "目標一出一半、其餘守止損", "half_be": "目標一出一半、其餘止損移到進場價"}
+STATS = {"limit_blocked": 0}  # 因漲停鎖住而買不到的 K 棒數（只在 full 模式計一次）
 
 
 def net_pct(gross_pct):
@@ -40,6 +41,10 @@ def sim_exit(entry, stop, t1, t2, typ, bars, mode):
         if fill is None:
             if k >= B.NO_FILL_DAYS:
                 return None, None, "no_fill"
+            if b.get("lim") and b["l"] >= b["lim"]:      # 當日成交全在漲停價（鎖住）：買不到，略過這根 K
+                if mode == "full":
+                    STATS["limit_blocked"] += 1
+                continue
             if typ == "pullback":
                 if b["l"] > entry:
                     continue
@@ -132,10 +137,13 @@ def run(hist, ex, n_signal, n_fwd=FORWARD_DAYS):
                 recent[key] = i
                 p = sg["plan"]
                 bars = []
+                prev_c = hist["days"][ds[i]].get(s["code"], [0, 0, 0, 0])[3]     # 訊號日收盤
                 for d in ds[i + 1:i + 1 + B.NO_FILL_DAYS + B.HOLD_MAX + 5]:
                     r = hist["days"][d].get(s["code"])
                     if r:
-                        bars.append({"d": d, "o": r[0], "h": r[1], "l": r[2], "c": r[3]})
+                        lim = B.r_down(prev_c * 1.10) if prev_c > 0 else None    # 漲停價：前收 ×1.1，依升降單位無條件捨去
+                        bars.append({"d": d, "o": r[0], "h": r[1], "l": r[2], "c": r[3], "lim": lim})
+                        prev_c = r[3]
                 t2 = p["t2"]
                 row = {"date": ds[i], "code": s["code"], "name": s["name"], "strategy": k, "type": sg["type"],
                        "score": sg["score"], "rank": sg.get("rank"), "bucket": rank_bucket(sg.get("rank")),
@@ -196,7 +204,7 @@ def main():
     }
     B.save_json(args.out, result, compact=False)
     s = result["summary"]
-    print("window", start, "~", end, "| trades", len(trades), file=sys.stderr)
+    print("window", start, "~", end, "| trades", len(trades), "| limit_blocked_bars", STATS["limit_blocked"], file=sys.stderr)
     for name in ("all", "ok_only"):
         print(name, json.dumps(s[name], ensure_ascii=False), file=sys.stderr)
     for k, v in s["by_strategy"].items():
