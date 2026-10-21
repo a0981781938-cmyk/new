@@ -143,6 +143,7 @@ button:focus-visible, select:focus-visible, input:focus-visible, summary:focus-v
 .mi-pill.wait { color: var(--muted); }
 .mi-cond { font-size: 11px; color: var(--muted); line-height: 1.4; font-variant-numeric: tabular-nums; }
 .mi-cond b { color: var(--fg); font-weight: 600; }
+.row > .confirm { grid-column: 1 / -1; margin-top: 4px; }
 .sutra { margin-top: 18px; padding-top: 12px; border-top: 1px dashed var(--line); text-align: center; letter-spacing: .08em; line-height: 2; color: var(--gold, var(--muted)); }
 .sutra-src { display: block; margin-top: 4px; font-size: 11px; letter-spacing: .04em; color: var(--muted); }
 .ladder { display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: var(--surface-2); }
@@ -277,6 +278,11 @@ button:focus-visible, select:focus-visible, input:focus-visible, summary:focus-v
       '<div class="mi-px">' + fmtP(s.close) + " " + pctHtml(s.pct) + "</div>" + pill + '<div class="mi-cond">' + cond + "</div>" +
       (s.locked ? '<span class="mi-pill wait">漲停鎖住</span>' : "") + "</li>";
   }
+  function strongMini(i, s) {
+    return '<li class="mini"><div class="mi-rk">' + (i + 1) + ' · <span class="mi-code">' + esc(s.code) + '</span></div><div class="mi-nm">' + esc(s.name) + "</div>" +
+      '<div class="mi-px">' + fmtP(s.close) + " " + pctHtml(s.pct) + '</div><span class="mi-pill">強勢 ' + s.strong + '</span>' +
+      '<div class="mi-cond">5日 ' + (s.ret5 >= 0 ? "+" : "") + s.ret5 + '% · 量比 <b>' + s.vr5.toFixed(1) + "</b></div></li>";
+  }
   function panel(title, count, sub, body, moreTab, cls) {
     return '<section class="panel"><div class="panel-head"><div><h3>' + title + "<span>" + count + "</span></h3><p>" + sub + "</p></div>" +
       (moreTab ? '<button class="more" type="button" data-tab="' + moreTab + '">看全部</button>' : "") + '</div><ol class="list' + (cls ? " " + cls : "") + '">' + body + "</ol></section>";
@@ -308,7 +314,7 @@ button:focus-visible, select:focus-visible, input:focus-visible, summary:focus-v
       '<div class="stat"><div class="k">上漲 / 下跌</div><div class="v"><span style="color:var(--up)">' + m.up + '</span> / <span style="color:var(--down)">' + m.down + '</span></div><div class="s">通過排除的股票</div></div>' +
       '<div class="stat"><div class="k">目前訊號</div><div class="v">' + sig.length + '</div><div class="s">策略 ' + k + "</div></div>" +
       '<div class="stat"><div class="k">資料日期</div><div class="v">' + m.date.slice(5).replace("-", "/") + '</div><div class="s">收盤資料 · 產生 ' + esc(m.generated || "") + '</div></div></div>';
-    html += panel("目前強勢", strong.length, "漲幅、量比與趨勢強度綜合排序", strong.map(function (s, i) { return row(i, s, mStrong(s), true); }).join("") || emptyLi("今天沒有上漲的股票。"), "strong");
+    html += panel("目前強勢", strong.length, "漲幅、量比與趨勢強度綜合排序", strong.map(function (s, i) { return strongMini(i, s); }).join("") || emptyLi("今天沒有上漲的股票。"), "strong", "grid3");
     html += panel("即將突破", pre.length, "接近壓力或 20MA，尚未大幅拉升", pre.slice(0, 5).map(function (s, i) { return miniCard(i, s); }).join("") || emptyLi("目前沒有符合的股票。"), "signals", "grid3");
     html += panel("突破後回踩", pb.length, "回到壓力轉支撐，可規劃進場與止損", pb.slice(0, 5).map(function (s, i) { return miniCard(i, s); }).join("") || emptyLi("目前沒有符合的股票。"), "plan", "grid3");
     html += '<p class="foot">已排除：成交量不足 ' + sk.low_volume + " 檔、股價低於 10 元 " + sk.low_price + " 檔、處置股 " + sk.punish + " 檔、全額交割 " + sk.full_delivery + " 檔、手動排除 " + sk.manual + " 檔、資料不足 " + sk.short_history + " 檔。</p>";
@@ -320,10 +326,10 @@ button:focus-visible, select:focus-visible, input:focus-visible, summary:focus-v
     st = st.filter(function (s) { return s.pct > 0; });
     if (S.q) st = st.filter(function (s) { return (s.code + s.name).toLowerCase().indexOf(S.q.toLowerCase()) > -1; });
     st.sort(function (a, b) { return key === "pct" ? b.pct - a.pct : key === "trend" ? b.trend - a.trend : b.strong - a.strong; });
-    var body = st.slice(0, 50).map(function (s, i) { return row(i, s, mStrong(s), true); }).join("") || emptyLi("沒有符合條件的股票。");
+    var body = st.slice(0, 50).map(function (s, i) { return strongMini(i, s); }).join("") || emptyLi("沒有符合條件的股票。");
     return '<section class="panel"><div class="panel-head"><div><h3>強勢股排行<span>' + Math.min(st.length, 50) + "</span></h3><p>強勢分 = 趨勢強度 40% + 漲幅 30% + 量比 30%</p></div></div>" +
       '<div class="controls"><select class="ctl" id="rsort" aria-label="排序"><option value="strong"' + (key === "strong" ? " selected" : "") + '>依強勢分</option><option value="pct"' + (key === "pct" ? " selected" : "") + '>依漲幅</option><option value="trend"' + (key === "trend" ? " selected" : "") + '>依趨勢強度</option></select>' +
-      '<input class="ctl q" id="q" type="search" placeholder="搜尋代號或名稱" value="' + esc(S.q) + '" aria-label="搜尋"></div><ol class="list">' + body + "</ol></section>";
+      '<input class="ctl q" id="q" type="search" placeholder="搜尋代號或名稱" value="' + esc(S.q) + '" aria-label="搜尋"></div><ol class="list grid3">' + body + "</ol></section>";
   }
 
   function vSignals() {
