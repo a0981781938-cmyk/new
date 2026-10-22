@@ -117,7 +117,17 @@ def rank_bucket(r):
     return "<60" if r < 60 else "60–69" if r < 70 else "70–79" if r < 80 else "80–89" if r < 90 else "90–100"
 
 
-def run(hist, ex, n_signal, n_fwd=FORWARD_DAYS):
+def periods(trades, split):
+    """把交易依訊號日分成前段（設計用）與後段（只檢驗一次）。"""
+    out = {}
+    for name, rows in (("前段", [t for t in trades if t["date"] < split]),
+                       ("後段", [t for t in trades if t["date"] >= split])):
+        out[name] = {"window": [rows[0]["date"], rows[-1]["date"]] if rows else None,
+                     "half": metrics(rows, key="net_half"), "full": metrics(rows, key="net_full")}
+    return out
+
+
+def run(hist, ex, n_signal, n_fwd=FORWARD_DAYS, strats="ABC"):
     ds = sorted(hist["days"])
     n = len(ds)
     first, last = n - n_signal - n_fwd, n - n_fwd - 1
@@ -127,7 +137,7 @@ def run(hist, ex, n_signal, n_fwd=FORWARD_DAYS):
     for i in range(first, last + 1):
         stocks, _, _ = B.analyse(hist, ex, upto=i)          # 只用第 i 天以前的資料
         for s in stocks:
-            for k in "ABC":
+            for k in strats:
                 sg = s["sig"][k]
                 if not sg or not sg.get("plan"):
                     continue
@@ -179,6 +189,8 @@ def main():
     ap.add_argument("--demo", action="store_true")
     ap.add_argument("--days", type=int, default=126, help="回測的訊號交易日數（126≈6 個月，250≈12 個月）")
     ap.add_argument("--out", default=os.path.join(B.DATA, "backtest.json"))
+    ap.add_argument("--strategy", default="ABC", choices=["A", "B", "C", "ABC"], help="只回測指定策略（A 最簡化版本）")
+    ap.add_argument("--split", default="2026-03-26", help="前段／後段的分界日（訊號日）")
     args = ap.parse_args()
 
     if args.demo:
@@ -192,7 +204,7 @@ def main():
         B.save_json(os.path.join(B.DATA, "backtest_history.json"), hist)
         ex, _ = B.fetch_excluded()
 
-    trades, start, end = run(hist, ex, args.days)
+    trades, start, end = run(hist, ex, args.days, strats=args.strategy)
     result = {
         "window": [start, end],
         "params": {"fee": FEE, "tax": TAX, "slip": SLIP, "signal_days": args.days,
@@ -200,6 +212,7 @@ def main():
         "note": "淨報酬已扣除手續費、證交稅與滑價。盈虧為每筆等額，最大回撤為淨報酬累加的百分點，不是複利。"
                 "處置股名單為今天的版本，未還原歷史；除權息未還原，單日漲跌超過 10% 的股票已排除。",
         "summary": summarize(trades),
+        "periods": periods(trades, args.split),
         "trades": trades,
     }
     B.save_json(args.out, result, compact=False)
@@ -215,6 +228,8 @@ def main():
         print("rank", k, json.dumps(v, ensure_ascii=False), file=sys.stderr)
     for k, v in s["exit_variants"].items():
         print("exit", k, json.dumps(v, ensure_ascii=False), file=sys.stderr)
+    for k, v in result["periods"].items():
+        print("period", k, v["window"], "half", json.dumps(v["half"], ensure_ascii=False), file=sys.stderr)
 
 
 if __name__ == "__main__":
